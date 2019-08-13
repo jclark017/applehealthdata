@@ -20,6 +20,8 @@ lib64/
 parts/
 sdist/
 var/
+mydata/
+hollydata/
 *.egg-info/
 .installed.cfg
 *.egg
