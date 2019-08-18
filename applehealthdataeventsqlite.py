@@ -17,6 +17,7 @@ import sqlite3
 
 from xml.etree import ElementTree
 from collections import Counter, OrderedDict
+from datetime import datetime
 
 __version__ = '1.3'
 
@@ -249,7 +250,7 @@ class HealthDataExtractorEV(object):
                     if cnt % 10000 == 0:
                         conn.commit()
                         self.report(str(cnt))
-                        diff = datetime.now() = starttime
+                        diff = datetime.now() - starttime
                         self.report(str(diff.seconds))
                     
                 cnt = cnt + 1
