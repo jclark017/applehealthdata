@@ -127,6 +127,7 @@ CONSTANTS = {
 LOOKUP_VALUES = {}
 
 PREFIX_RE = re.compile('^HK.*TypeIdentifier(.+)$')
+DEVICE_RE = re.compile('^<<HK.*>, (.+)>$')
 ABBREVIATE = True
 VERBOSE = True
 
@@ -185,11 +186,11 @@ def dtype(datatype):
     else:
         raise KeyError('Unexpected format value: %s' % datatype)
 
-def abbreviate(s, enabled=ABBREVIATE):
+def abbreviate(s, reg, enabled=ABBREVIATE):
     """
     Abbreviate particularly verbose strings based on a regular expression
     """
-    m = re.match(PREFIX_RE, s)
+    m = re.match(reg, s)
     return m.group(1) if enabled and m else s
 
 
@@ -220,6 +221,7 @@ class HealthDataExtractorEV(object):
         self.in_path = path
         self.verbose = verbose
         self.directory = os.path.abspath(os.path.split(path)[0])
+        self.tl = []
 
         conn = sqlite3.connect(os.path.join(self.directory, 'export_test.sqlite'))
         c = conn.cursor()
@@ -247,17 +249,18 @@ class HealthDataExtractorEV(object):
                             element.attrib['motionContext'] = elem.attrib['value']
                     self.abbreviate_types(element)
                     self.write_records(element, c)
+                    # commit every 10,000 rows
                     if cnt % 10000 == 0:
                         conn.commit()
-                        self.report(str(cnt))
                         diff = datetime.now() - starttime
-                        self.report(str(diff.seconds))
-                    
+                        self.report(str(cnt) + "-" + str(diff.seconds) + ": " + str(round(diff.seconds/cnt)))
+
                 cnt = cnt + 1
                 root.clear()
 
             # dump the lookup lists to tables
             self.lookup_output(c)
+            conn.commit()
         
         conn.close()
         #self.root = self.data._root
@@ -271,7 +274,9 @@ class HealthDataExtractorEV(object):
         """
         if node.tag == 'Record':
             if 'type' in node.attrib:
-                node.attrib['type'] = abbreviate(node.attrib['type'])
+                node.attrib['type'] = abbreviate(node.attrib['type'], PREFIX_RE)
+            if 'device' in node.attrib:
+                node.attrib['device'] = abbreviate(node.attrib['device'], DEVICE_RE)
 
     
     def report(self, msg, end='\n'):
@@ -288,27 +293,27 @@ class HealthDataExtractorEV(object):
 
             values = [self.lookup(field,format_value(attributes.get(field,''), datatype),c)
                         for (field, datatype) in FIELDS[node.tag][version].items()]
-
-            tl = self.table_list(c)
+ 
             line = encode(','.join(values))
-            if kind in tl:
+            if kind in self.tl:
                 self.write_record(kind, line, c)
             else:
                 self.open_for_writing(node.tag, version, kind, c)
+                self.tl = self.table_list(c)
                 self.write_record(kind, line, c)
     
     def lookup(self, field, value, c):
         if LOOKUP_FIELDS.get(field) is None:
             return value
         else:
-            if LOOKUP_VALUES.get(field) is None:
-                LOOKUP_VALUES[field] = []
+            if LOOKUP_VALUES.get(LOOKUP_FIELDS[field]) is None:
+                LOOKUP_VALUES[LOOKUP_FIELDS[field]] = []
 
-            if value.replace("'","") in LOOKUP_VALUES[field]:
-                return format_value(str(LOOKUP_VALUES[field].index(value.replace("'",""))),'s')
+            if value.replace("'","") in LOOKUP_VALUES[LOOKUP_FIELDS[field]]:
+                return format_value(str(LOOKUP_VALUES[LOOKUP_FIELDS[field]].index(value.replace("'",""))),'s')
             else:
-                LOOKUP_VALUES[field].append(value.replace("'",""))
-                return format_value(str(LOOKUP_VALUES[field].index(value.replace("'",""))),'s')
+                LOOKUP_VALUES[LOOKUP_FIELDS[field]].append(value.replace("'",""))
+                return format_value(str(LOOKUP_VALUES[LOOKUP_FIELDS[field]].index(value.replace("'",""))),'s')
 
 #            names = self.table_list(c)
 #            if 'lookup' + field in names:
@@ -355,11 +360,6 @@ class HealthDataExtractorEV(object):
     def write_record(self, kind, line, c):
         script = 'INSERT INTO {} VALUES ({})' .format(kind, line)
         c.execute(script)
-    
-    def close_files(self):
-        for (kind, f) in self.handles.items():
-            f.close()
-            self.report('Written %s data.' % abbreviate(kind))
 
 if __name__ == '__main__':
     if len(sys.argv) != 2:
@@ -367,6 +367,5 @@ if __name__ == '__main__':
               file=sys.stderr)
         sys.exit(1)
     data = HealthDataExtractorEV(sys.argv[1])
-    data.close_files()
 #    data.report_stats()
 #    data.extract()
