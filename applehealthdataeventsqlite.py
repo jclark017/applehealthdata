@@ -20,6 +20,18 @@ from collections import Counter, OrderedDict
 
 __version__ = '1.3'
 
+LOOKUP_FIELDS = OrderedDict((
+    ('sourceName', 'sourceName'),
+    ('sourceVersion', 'sourceVersion'),
+    ('device', 'device'),
+    ('type', 'type'),
+    ('workoutActivityType', 'type'),
+    ('unit', 'unit'),
+    ('durationUnit', 'unit'),
+    ('totalDistanceUnit', 'unit'),
+    ('totalEnergyBurnedUnit', 'unit'),
+))
+
 RECORD_FIELDS = OrderedDict((
     ('sourceName', 's'),
     ('sourceVersion', 's'),
@@ -29,6 +41,19 @@ RECORD_FIELDS = OrderedDict((
     ('creationDate', 'd'),
     ('startDate', 'd'),
     ('endDate', 'd'),
+    ('value', 'n'),
+))
+
+RECORD_FIELDS_HR = OrderedDict((
+    ('sourceName', 's'),
+    ('sourceVersion', 's'),
+    ('device', 's'),
+    ('type', 's'),
+    ('unit', 's'),
+    ('creationDate', 'd'),
+    ('startDate', 'd'),
+    ('endDate', 'd'),
+    ('motionContext', 'd'),
     ('value', 'n'),
 ))
 
@@ -42,6 +67,10 @@ ACTIVITY_SUMMARY_FIELDS = OrderedDict((
     ('appleStandHours', 'n'),
     ('appleStandHoursGoal', 'n'),
 ))
+
+ACTIVITY_SUMMARY_VERSIONS = {
+    '1': ACTIVITY_SUMMARY_FIELDS
+}
 
 WORKOUT_FIELDS = OrderedDict((
     ('sourceName', 's'),
@@ -59,10 +88,33 @@ WORKOUT_FIELDS = OrderedDict((
     ('totalEnergyBurnedUnit', 's'),
 ))
 
+WORKOUT_VERSIONS = {
+    '1': WORKOUT_FIELDS
+}
+
+RECORD_TYPES = {
+    'ActiveEnergyBurned': RECORD_FIELDS,
+    'AppleExerciseTime': RECORD_FIELDS,
+    'AppleStandHour': RECORD_FIELDS,
+    'BasalEnergyBurned': RECORD_FIELDS,
+    'BodyMass': RECORD_FIELDS,
+    'DistanceWalkingRunning': RECORD_FIELDS,
+    'FlightsClimbed': RECORD_FIELDS,
+    'HeartRate': RECORD_FIELDS_HR,
+    'HeartRateVariabilitySDNN': RECORD_FIELDS,
+    'Height': RECORD_FIELDS,
+    'MindfulSession': RECORD_FIELDS,
+    'SleepAnalysis': RECORD_FIELDS,
+    'StepCount': RECORD_FIELDS,
+    'VO2Max': RECORD_FIELDS,
+    'RestingHeartRate': RECORD_FIELDS,
+    'WalkingHeartRateAverage': RECORD_FIELDS
+}
+
 FIELDS = {
-    'Record': RECORD_FIELDS,
-    'ActivitySummary': ACTIVITY_SUMMARY_FIELDS,
-    'Workout': WORKOUT_FIELDS,
+    'Record': RECORD_TYPES,
+    'ActivitySummary': ACTIVITY_SUMMARY_VERSIONS,
+    'Workout': WORKOUT_VERSIONS,
 }
 
 CONSTANTS = {
@@ -71,6 +123,7 @@ CONSTANTS = {
     'HKCategoryValueSleepAnalysisInBed': '1',
 }
 
+LOOKUP_VALUES = {}
 
 PREFIX_RE = re.compile('^HK.*TypeIdentifier(.+)$')
 ABBREVIATE = True
@@ -167,8 +220,9 @@ class HealthDataExtractorEV(object):
         self.verbose = verbose
         self.directory = os.path.abspath(os.path.split(path)[0])
 
-        conn = sqlite3.connect(os.path.join(self.directory, 'export.sqlite'))
+        conn = sqlite3.connect(os.path.join(self.directory, 'export_test.sqlite'))
         c = conn.cursor()
+        starttime = datetime.now()
         with open(path) as f:
             self.report('Reading data from %s . . . ' % path, end='')
             #self.data = ElementTree.iterparse(f)
@@ -187,13 +241,22 @@ class HealthDataExtractorEV(object):
             for event, element in context:
                 # element is a whole element
                 if event == "end":
+                    for elem in element:
+                        if elem.tag == 'MetadataEntry' and elem.attrib['key'] == "HKMetadataKeyHeartRateMotionContext":
+                            element.attrib['motionContext'] = elem.attrib['value']
                     self.abbreviate_types(element)
                     self.write_records(element, c)
                     if cnt % 10000 == 0:
                         conn.commit()
+                        self.report(str(cnt))
+                        diff = datetime.now() = starttime
+                        self.report(str(diff.seconds))
+                    
                 cnt = cnt + 1
                 root.clear()
 
+            # dump the lookup lists to tables
+            self.lookup_output(c)
         
         conn.close()
         #self.root = self.data._root
@@ -220,23 +283,72 @@ class HealthDataExtractorEV(object):
         if node.tag in kinds:
             attributes = node.attrib
             kind = attributes['type'] if node.tag == 'Record' else node.tag
-            values = [format_value(attributes.get(field,''), datatype)
-                        for (field, datatype) in FIELDS[node.tag].items()]
+            version = attributes['type'] if node.tag == 'Record' else "1"
+
+            values = [self.lookup(field,format_value(attributes.get(field,''), datatype),c)
+                        for (field, datatype) in FIELDS[node.tag][version].items()]
+
             tl = self.table_list(c)
             line = encode(','.join(values))
             if kind in tl:
                 self.write_record(kind, line, c)
             else:
-                self.open_for_writing(node.tag, kind, c)
+                self.open_for_writing(node.tag, version, kind, c)
                 self.write_record(kind, line, c)
     
+    def lookup(self, field, value, c):
+        if LOOKUP_FIELDS.get(field) is None:
+            return value
+        else:
+            if LOOKUP_VALUES.get(field) is None:
+                LOOKUP_VALUES[field] = []
+
+            if value.replace("'","") in LOOKUP_VALUES[field]:
+                return format_value(str(LOOKUP_VALUES[field].index(value.replace("'",""))),'s')
+            else:
+                LOOKUP_VALUES[field].append(value.replace("'",""))
+                return format_value(str(LOOKUP_VALUES[field].index(value.replace("'",""))),'s')
+
+#            names = self.table_list(c)
+#            if 'lookup' + field in names:
+#                value = self.lookup_lov('lookup' + field, value, c)
+#            else:
+#                self.lookup_create('lookup' + field, c)
+#                value = self.lookup_lov('lookup' + field, value, c)
+#            return format_value(str(value),'s')
+
+    def lookup_create(self, table, c):
+        c.execute('CREATE TABLE {} (value TEXT, name TEXT)' .format(table))
+
+    def lookup_output(self, c):
+        for lst in LOOKUP_VALUES:
+            self.lookup_create('z' + lst,c)
+        
+            for value in LOOKUP_VALUES[lst]:
+                # Insert the missing value
+                script = 'INSERT INTO {} (value, name) VALUES ({}, {})' .format('z' + lst, format_value(str(LOOKUP_VALUES[lst].index(value)),'s'), format_value(value,'s'))
+                c.execute(script)
+
+    # def lookup_table(self, table, value, c):
+    #     script = 'SELECT value, name FROM {} WHERE name = {}' .format(table, value)
+    #     c.execute(script)
+    #     rows = c.fetchall()
+    #     for row in rows:
+    #         if row[1] == value.replace("'",""):
+    #             return row[0]
+        
+    #     # Insert the missing value
+    #     script = 'INSERT INTO {} (name) VALUES ({})' .format(table, value)
+    #     c.execute(script)
+    #     return self.lookup_lov(table, value, c)
+
     def table_list(self, c):
         c.execute('SELECT name FROM sqlite_master WHERE type =\'table\' AND name NOT LIKE \'sqlite_%\';')
         names = [tup[0] for tup in c.fetchall()]
         return names
 
-    def open_for_writing(self, tag, kind, c):
-        fl = ', '.join('{} {}'.format(key, dtype(value)) for key, value in FIELDS[tag].items())
+    def open_for_writing(self, tag, version, kind, c):
+        fl = ', '.join('{} {}'.format(key, dtype(value)) for key, value in FIELDS[tag][version].items())
         c.execute('CREATE TABLE {} ({})' .format(kind, fl))
 
     def write_record(self, kind, line, c):
@@ -247,126 +359,6 @@ class HealthDataExtractorEV(object):
         for (kind, f) in self.handles.items():
             f.close()
             self.report('Written %s data.' % abbreviate(kind))
-
-# class HealthDataExtractor(object):
-#     """
-#     Extract health data from Apple Health App's XML export, export.xml.
-
-#     Inputs:
-#         path:      Relative or absolute path to export.xml
-#         verbose:   Set to False for less verbose output
-
-#     Outputs:
-#         Writes a CSV file for each record type found, in the same
-#         directory as the input export.xml. Reports each file written
-#         unless verbose has been set to False.
-#     """
-#     def __init__(self, path, verbose=VERBOSE):
-#         self.in_path = path
-#         self.verbose = verbose
-#         self.directory = os.path.abspath(os.path.split(path)[0])
-#         with open(path) as f:
-#             self.report('Reading data from %s . . . ' % path, end='')
-#             self.data = ElementTree.parse(f)
-#             self.report('done')
-#         self.root = self.data._root
-#         self.nodes = self.root.getchildren()
-#         self.n_nodes = len(self.nodes)
-#         self.abbreviate_types()
-#         self.collect_stats()
-
-#     def report(self, msg, end='\n'):
-#         if self.verbose:
-#             print(msg, end=end)
-#             sys.stdout.flush()
-
-#     def count_tags_and_fields(self):
-#         self.tags = Counter()
-#         self.fields = Counter()
-#         for record in self.nodes:
-#             self.tags[record.tag] += 1
-#             for k in record.keys():
-#                 self.fields[k] += 1
-
-#     def count_record_types(self):
-#         """
-#         Counts occurrences of each type of (conceptual) "record" in the data.
-
-#         In the case of nodes of type 'Record', this counts the number of
-#         occurrences of each 'type' or record in self.record_types.
-
-#         In the case of nodes of type 'ActivitySummary' and 'Workout',
-#         it just counts those in self.other_types.
-
-#         The slightly different handling reflects the fact that 'Record'
-#         nodes come in a variety of different subtypes that we want to write
-#         to different data files, whereas (for now) we are going to write
-#         all Workout entries to a single file, and all ActivitySummary
-#         entries to another single file.
-#         """
-#         self.record_types = Counter()
-#         self.other_types = Counter()
-#         for record in self.nodes:
-#             if record.tag == 'Record':
-#                 self.record_types[record.attrib['type']] += 1
-#             elif record.tag in ('ActivitySummary', 'Workout'):
-#                 self.other_types[record.tag] += 1
-#             elif record.tag in ('Export', 'Me'):
-#                 pass
-#             else:
-#                 self.report('Unexpected node of type %s.' % record.tag)
-
-#     def collect_stats(self):
-#         self.count_record_types()
-#         self.count_tags_and_fields()
-
-#     def open_for_writing(self):
-#         self.handles = {}
-#         self.paths = []
-#         for kind in (list(self.record_types) + list(self.other_types)):
-#             path = os.path.join(self.directory, '%s.csv' % abbreviate(kind))
-#             f = open(path, 'w')
-#             headerType = (kind if kind in ('Workout', 'ActivitySummary')
-#                                else 'Record')
-#             f.write(','.join(FIELDS[headerType].keys()) + '\n')
-#             self.handles[kind] = f
-#             self.report('Opening %s for writing' % path)
-
-#     def abbreviate_types(self):
-#         """
-#         Shorten types by removing common boilerplate text.
-#         """
-#         for node in self.nodes:
-#             if node.tag == 'Record':
-#                 if 'type' in node.attrib:
-#                     node.attrib['type'] = abbreviate(node.attrib['type'])
-
-#     def write_records(self):
-#         kinds = FIELDS.keys()
-#         for node in self.nodes:
-#             if node.tag in kinds:
-#                 attributes = node.attrib
-#                 kind = attributes['type'] if node.tag == 'Record' else node.tag
-#                 values = [format_value(attributes.get(field), datatype)
-#                           for (field, datatype) in FIELDS[node.tag].items()]
-#                 line = encode(','.join(values) + '\n')
-#                 self.handles[kind].write(line)
-
-#     def close_files(self):
-#         for (kind, f) in self.handles.items():
-#             f.close()
-#             self.report('Written %s data.' % abbreviate(kind))
-
-#     def extract(self):
-#         self.open_for_writing()
-#         self.write_records()
-#         self.close_files()
-
-#     def report_stats(self):
-#         print('\nTags:\n%s\n' % format_freqs(self.tags))
-#         print('Fields:\n%s\n' % format_freqs(self.fields))
-#         print('Record types:\n%s\n' % format_freqs(self.record_types))
-
 
 if __name__ == '__main__':
     if len(sys.argv) != 2:

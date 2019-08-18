@@ -20,13 +20,15 @@ SELECT
 	datetime(strftime('%s',datetime(substr(startDate,1,20))) - strftime('%s',datetime(substr(startDate,1,20))) % 3600, 'unixepoch') startTimeHour,
 	avg(value) AverageRate,
 	min(value) MinRate,
-	max(value) MaxRate
+	max(value) MaxRate,
+	avg(case when motionContext = 2 then value end) as AverageActiveRate, 
+	avg(case when motionContext = 1 then value end) as AverageSedentaryRate
 FROM 
 	HeartRate
 GROUP BY
 	datetime(strftime('%s',datetime(substr(startDate,1,20))) - strftime('%s',datetime(substr(startDate,1,20))) % 3600, 'unixepoch')
 	
-	
+select * from vHourlyHeartRate
 -- Create a date dimension table at 5 minute intervals
 DROP TABLE IF EXISTS DateDimensionMinute;
 CREATE TABLE DateDimensionMinute AS
@@ -40,7 +42,7 @@ LIMIT 1000000
 )
 SELECT CalendarDateInterval FROM rDateDimensionMinute;
 
---Create View vDateDimensionMinute
+--Create View vDateDimensionMinute as
 select 
 	CalendarDateInterval,
 	datetime(CalendarDateInterval, '+299 second') CalendarDateIntervalEnd,
