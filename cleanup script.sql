@@ -29,7 +29,11 @@ GROUP BY
 	datetime(strftime('%s',datetime(substr(startDate,1,20))) - strftime('%s',datetime(substr(startDate,1,20))) % 3600, 'unixepoch')
 	
 select * from vHourlyHeartRate
+
+/**********************************************************
 -- Create a date dimension table at 5 minute intervals
+**********************************************************/
+
 DROP TABLE IF EXISTS DateDimensionMinute;
 CREATE TABLE DateDimensionMinute AS
 WITH RECURSIVE
@@ -42,7 +46,7 @@ LIMIT 1000000
 )
 SELECT CalendarDateInterval FROM rDateDimensionMinute;
 
---Create View vDateDimensionMinute as
+--Create table tDateDimensionMinute as
 select 
 	CalendarDateInterval,
 	datetime(CalendarDateInterval, '+299 second') CalendarDateIntervalEnd,
@@ -99,4 +103,21 @@ select
 	strftime('%Y',CalendarDateInterval)	YearNumber
 from 
 	DateDimensionMinute
+
+/* Create a reconstituted view of HeartRate */
+SELECT	
+	hr.startDate,
+	hr.motionContext,
+	hr.value,
+	vd.*
+FROM
+	HeartRate hr inner JOIN
+	tDateDimensionMinute vd on 
+		hr.startDate >= vd.CalendarDateInterval and
+		hr.endDate <= vd.CalendarDateIntervalEnd
+	
+SELECT
+	*
+FROM
+	
 
