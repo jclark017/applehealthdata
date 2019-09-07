@@ -1,0 +1,10 @@
+{
+    "sqltools.connections": [
+        {
+            "database": ".\\hollydata\\export.sqlite",
+            "dialect": "SQLite",
+            "name": "iWatch Export"
+        }
+    ],
+    "sqltools.useNodeRuntime": true
+}
