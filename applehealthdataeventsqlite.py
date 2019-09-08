@@ -223,7 +223,7 @@ class HealthDataExtractorEV(object):
         self.directory = os.path.abspath(os.path.split(path)[0])
         self.tl = []
 
-        conn = sqlite3.connect(os.path.join(self.directory, 'export_test.sqlite'))
+        conn = sqlite3.connect(os.path.join(self.directory, 'export.sqlite'))
         c = conn.cursor()
         starttime = datetime.now()
         with open(path) as f:
